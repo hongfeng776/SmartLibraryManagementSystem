@@ -1,4 +1,10 @@
-from services.library_service import LibraryService
+from typing import Optional
+from services.library_service import (
+    LibraryService,
+    LibraryServiceError,
+    DuplicateIsbnError,
+    InvalidInputError,
+)
 from models.book import Book
 
 
@@ -7,24 +13,36 @@ class ConsoleUI:
         self.service = service
 
     def run(self) -> None:
+        print("欢迎使用图书管理系统！")
         while True:
-            self._print_menu()
-            choice = input("请选择操作 (1-6): ").strip()
-            if choice == "1":
-                self._add_book()
-            elif choice == "2":
-                self._search_book()
-            elif choice == "3":
-                self._update_book()
-            elif choice == "4":
-                self._delete_book()
-            elif choice == "5":
-                self._list_all_books()
-            elif choice == "6":
-                print("再见！")
+            try:
+                self._print_menu()
+                choice = input("请选择操作 (1-6): ").strip()
+                if choice == "1":
+                    self._add_book()
+                elif choice == "2":
+                    self._search_book()
+                elif choice == "3":
+                    self._update_book()
+                elif choice == "4":
+                    self._delete_book()
+                elif choice == "5":
+                    self._list_all_books()
+                elif choice == "6":
+                    print("再见！")
+                    break
+                else:
+                    print("无效选项，请输入 1-6 之间的数字。")
+            except KeyboardInterrupt:
+                print("\n\n检测到中断，正在退出...")
                 break
-            else:
-                print("无效选项，请重新输入。")
+            except EOFError:
+                print("\n\n输入流已结束，正在退出...")
+                break
+            except LibraryServiceError as e:
+                print(f"操作失败: {e}")
+            except Exception as e:
+                print(f"发生未知错误: {e}")
             print()
 
     def _print_menu(self) -> None:
@@ -39,28 +57,64 @@ class ConsoleUI:
         print("6. 退出")
         print("-" * 32)
 
+    def _input_int(
+        self, prompt: str, min_value: Optional[int] = None, max_value: Optional[int] = None
+    ) -> Optional[int]:
+        raw = input(prompt).strip()
+        if not raw:
+            return None
+        try:
+            value = int(raw)
+        except ValueError:
+            print("输入无效，请输入数字。")
+            return None
+        if min_value is not None and value < min_value:
+            print(f"输入无效，不能小于 {min_value}。")
+            return None
+        if max_value is not None and value > max_value:
+            print(f"输入无效，不能大于 {max_value}。")
+            return None
+        return value
+
+    def _input_required(self, prompt: str) -> Optional[str]:
+        value = input(prompt).strip()
+        if not value:
+            print("输入不能为空。")
+            return None
+        return value
+
+    def _input_choice(self, prompt: str, choices: list[str]) -> Optional[str]:
+        value = input(prompt).strip()
+        if value not in choices:
+            print(f"输入无效，请选择: {', '.join(choices)}")
+            return None
+        return value
+
     def _add_book(self) -> None:
         print("\n--- 添加图书 ---")
-        title = input("书名: ").strip()
-        author = input("作者: ").strip()
+        title = self._input_required("书名: ")
+        if not title:
+            return
+        author = self._input_required("作者: ")
+        if not author:
+            return
         isbn = input("ISBN (可选): ").strip()
         publisher = input("出版社 (可选): ").strip()
+        year = self._input_int("出版年份: ", min_value=1)
+        if year is None:
+            return
         try:
-            year = int(input("出版年份: ").strip())
-        except ValueError:
-            print("年份必须是数字，添加失败。")
-            return
-        if not title or not author:
-            print("书名和作者不能为空。")
-            return
-        book = self.service.add_book(title, author, year, isbn, publisher)
-        print(f"添加成功！图书ID: {book.book_id}")
+            book = self.service.add_book(title, author, year, isbn, publisher)
+            print(f"添加成功！图书ID: {book.book_id}")
+        except DuplicateIsbnError as e:
+            print(f"添加失败: {e}")
+        except InvalidInputError as e:
+            print(f"输入无效: {e}")
 
     def _search_book(self) -> None:
         print("\n--- 搜索图书 ---")
-        keyword = input("请输入书名/作者/ISBN关键词: ").strip()
+        keyword = self._input_required("请输入书名/作者/ISBN关键词: ")
         if not keyword:
-            print("关键词不能为空。")
             return
         results = self.service.search_books(keyword)
         if results:
@@ -74,13 +128,14 @@ class ConsoleUI:
         print("请选择查找方式:")
         print("1. 按书名查找")
         print("2. 按 ISBN 查找")
-        mode = input("请选择 (1/2): ").strip()
+        mode = self._input_choice("请选择 (1/2): ", ["1", "2"])
+        if not mode:
+            return
 
         book = None
         if mode == "1":
-            title = input("请输入书名: ").strip()
+            title = self._input_required("请输入书名: ")
             if not title:
-                print("书名不能为空。")
                 return
             matches = self.service.find_books_by_title(title)
             if not matches:
@@ -91,20 +146,15 @@ class ConsoleUI:
             else:
                 print(f"找到 {len(matches)} 本匹配的图书:")
                 self._print_books(matches)
-                book_id = input("请输入要修改的图书ID: ").strip()
+                book_id = self._input_required("请输入要修改的图书ID: ")
+                if not book_id:
+                    return
                 book = self.service.find_book_by_id(book_id)
         elif mode == "2":
-            isbn = input("请输入 ISBN: ").strip()
+            isbn = self._input_required("请输入 ISBN: ")
             if not isbn:
-                print("ISBN 不能为空。")
                 return
             book = self.service.find_book_by_isbn(isbn)
-            if not book:
-                print("未找到该 ISBN 对应的图书。")
-                return
-        else:
-            print("无效选项。")
-            return
 
         if not book:
             print("未找到该图书。")
@@ -114,53 +164,60 @@ class ConsoleUI:
         self._print_book_detail(book)
 
         print("\n请输入新信息（直接回车表示不修改）:")
-        new_title = input(f"书名 [{book.title}]: ").strip()
-        new_author = input(f"作者 [{book.author}]: ").strip()
-        new_isbn = input(f"ISBN [{book.isbn or '(空)'}]: ").strip()
-        new_publisher = input(f"出版社 [{book.publisher or '(空)'}]: ").strip()
+        new_title = input(f"书名 [{book.title}]: ").strip() or None
+        new_author = input(f"作者 [{book.author}]: ").strip() or None
+        new_isbn = input(f"ISBN [{book.isbn or '(空)'}]: ").strip() or None
+        new_publisher = input(f"出版社 [{book.publisher or '(空)'}]: ").strip() or None
         new_year_str = input(f"年份 [{book.year}]: ").strip()
 
         updates = {}
-        if new_title:
+        if new_title is not None:
             updates["title"] = new_title
-        if new_author:
+        if new_author is not None:
             updates["author"] = new_author
-        if new_isbn:
+        if new_isbn is not None:
             updates["isbn"] = new_isbn
-        if new_publisher:
+        if new_publisher is not None:
             updates["publisher"] = new_publisher
         if new_year_str:
             try:
                 updates["year"] = int(new_year_str)
             except ValueError:
-                print("年份必须是数字，年份未修改。")
+                print("年份输入无效，年份未修改。")
 
         if not updates:
             print("没有修改任何信息。")
             return
 
-        updated = self.service.update_book(book.book_id, **updates)
-        if updated:
-            print("修改成功！")
-            print("\n修改后信息:")
-            self._print_book_detail(updated)
-        else:
-            print("修改失败。")
+        try:
+            updated = self.service.update_book(book.book_id, **updates)
+            if updated:
+                print("修改成功！")
+                print("\n修改后信息:")
+                self._print_book_detail(updated)
+            else:
+                print("修改失败：图书不存在。")
+        except DuplicateIsbnError as e:
+            print(f"修改失败: {e}")
+        except InvalidInputError as e:
+            print(f"输入无效: {e}")
 
     def _delete_book(self) -> None:
         print("\n--- 删除图书 ---")
-        book_id = input("请输入要删除的图书ID: ").strip()
+        book_id = self._input_required("请输入要删除的图书ID: ")
         if not book_id:
-            print("图书ID不能为空。")
             return
         book = self.service.find_book_by_id(book_id)
         if not book:
-            print("未找到该图书。")
+            print("未找到该图书，删除失败。")
             return
         confirm = input(f"确定删除《{book.title}》吗? (y/n): ").strip().lower()
         if confirm == "y":
-            self.service.delete_book(book_id)
-            print("删除成功！")
+            success = self.service.delete_book(book_id)
+            if success:
+                print("删除成功！")
+            else:
+                print("删除失败：图书不存在。")
         else:
             print("已取消删除。")
 

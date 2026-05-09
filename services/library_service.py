@@ -4,10 +4,37 @@ from storage.json_storage import JsonStorage
 import uuid
 
 
+class LibraryServiceError(Exception):
+    pass
+
+
+class DuplicateIsbnError(LibraryServiceError):
+    pass
+
+
+class BookNotFoundError(LibraryServiceError):
+    pass
+
+
+class InvalidInputError(LibraryServiceError):
+    pass
+
+
 class LibraryService:
     def __init__(self, storage: JsonStorage):
         self.storage = storage
         self.books: List[Book] = self.storage.load()
+
+    def _is_isbn_taken(self, isbn: str, exclude_book_id: Optional[str] = None) -> bool:
+        isbn_stripped = isbn.strip()
+        if not isbn_stripped:
+            return False
+        for book in self.books:
+            if book.book_id == exclude_book_id:
+                continue
+            if book.isbn and book.isbn == isbn_stripped:
+                return True
+        return False
 
     def add_book(
         self,
@@ -17,6 +44,17 @@ class LibraryService:
         isbn: str = "",
         publisher: str = "",
     ) -> Book:
+        title = title.strip()
+        author = author.strip()
+        if not title:
+            raise InvalidInputError("书名不能为空")
+        if not author:
+            raise InvalidInputError("作者不能为空")
+        if year <= 0:
+            raise InvalidInputError("年份必须是正整数")
+        isbn = isbn.strip()
+        if self._is_isbn_taken(isbn):
+            raise DuplicateIsbnError(f"ISBN {isbn} 已存在")
         book_id = str(uuid.uuid4())[:8]
         book = Book(
             book_id=book_id,
@@ -24,7 +62,7 @@ class LibraryService:
             author=author,
             year=year,
             isbn=isbn,
-            publisher=publisher,
+            publisher=publisher.strip(),
         )
         self.books.append(book)
         self.storage.save(self.books)
@@ -80,15 +118,26 @@ class LibraryService:
         if not book:
             return None
         if title is not None:
+            title = title.strip()
+            if not title:
+                raise InvalidInputError("书名不能为空")
             book.title = title
         if author is not None:
+            author = author.strip()
+            if not author:
+                raise InvalidInputError("作者不能为空")
             book.author = author
         if year is not None:
+            if year <= 0:
+                raise InvalidInputError("年份必须是正整数")
             book.year = year
         if isbn is not None:
+            isbn = isbn.strip()
+            if self._is_isbn_taken(isbn, exclude_book_id=book_id):
+                raise DuplicateIsbnError(f"ISBN {isbn} 已存在")
             book.isbn = isbn
         if publisher is not None:
-            book.publisher = publisher
+            book.publisher = publisher.strip()
         self.storage.save(self.books)
         return book
 
