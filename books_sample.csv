@@ -1,0 +1,6 @@
+book_id,title,author,year,isbn,publisher
+,Python编程从入门到实践,Eric Matthes,2016,978-7-115-42802-8,人民邮电出版社
+,Java编程思想,Bruce Eckel,2006,978-7-111-21382-6,机械工业出版社
+,C++ Primer,Stanley Lippman,2012,978-7-111-21182-6,机械工业出版社
+,算法导论,Thomas Cormen,2009,978-7-111-40701-0,机械工业出版社
+,设计模式,Erich Gamma,2000,978-7-111-21125-9,机械工业出版社

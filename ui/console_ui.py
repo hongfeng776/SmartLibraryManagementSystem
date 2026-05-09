@@ -10,10 +10,11 @@ from typing import Optional
 from models.book import Book
 from services.library_service import (
     LibraryService,
-    LibraryServiceError,
     DuplicateIsbnError,
     InvalidInputError,
 )
+from storage.csv_storage import CsvStorageError, CsvInvalidFormatError
+from ui.ui_utils import get_file_name_from_path
 
 
 class ConsoleUI:
@@ -61,7 +62,7 @@ class ConsoleUI:
         try:
             while True:
                 self._print_main_menu()
-                choice = input("\n  👉 请选择操作 (1-8): ").strip()
+                choice = input("\n  👉 请选择操作 (1-9): ").strip()
 
                 if choice == "1":
                     self._add_book()
@@ -78,10 +79,12 @@ class ConsoleUI:
                 elif choice == "7":
                     self._show_backup_menu()
                 elif choice == "8":
+                    self._show_csv_menu()
+                elif choice == "9":
                     self._shutdown()
                     break
                 else:
-                    self._print_error("无效选项，请输入 1-8 之间的数字哦")
+                    self._print_error("无效选项，请输入 1-9 之间的数字哦")
 
                 input("\n  按回车键返回主菜单...")
 
@@ -103,7 +106,14 @@ class ConsoleUI:
         """
         try:
             self.service.flush()
-            print("  ✅ 数据已保存。再见！👋")
+            print("  ✅ 数据已保存。")
+
+            if self.service.get_book_count() > 0:
+                backup_path = self.service.create_backup()
+                if backup_path:
+                    print(f"  💾 已自动创建备份: {backup_path}")
+
+            print("  👋 再见！")
         except Exception as error:
             self._print_error(f"保存数据时出错: {error}")
 
@@ -164,7 +174,8 @@ class ConsoleUI:
         print("  5️⃣  📋 查看所有图书")
         print("  6️⃣  📊 统计信息")
         print("  7️⃣  💾 备份与恢复")
-        print("  8️⃣  🚪 退出系统")
+        print("  8️⃣  � CSV导入导出")
+        print("  9️⃣  � 退出系统")
         print(self.LINE)
 
     def _input_int(
@@ -701,7 +712,7 @@ class ConsoleUI:
         print("  " + "-" * 60)
 
         for index, backup in enumerate(backups, 1):
-            file_name = backup.split("\\")[-1] if "\\" in backup else backup.split("/")[-1]
+            file_name = get_file_name_from_path(backup)
             marker = " 🔄 最新" if index == 1 else ""
             print(f"  {index:<6} {file_name:<50}{marker}")
 
@@ -736,6 +747,218 @@ class ConsoleUI:
 
             except ValueError:
                 self._print_error("请输入有效的数字序号")
+
+    def _show_csv_menu(self) -> None:
+        """
+        CSV导入导出功能菜单
+
+        提供从CSV文件批量导入和导出图书数据的功能。
+        """
+        while True:
+            self._clear_section()
+            print("  📄 CSV导入导出")
+            print(self.THIN_LINE)
+
+            book_count = self.service.get_book_count()
+            self._print_info(f"📚 当前书库藏书: {book_count} 本")
+
+            print()
+            print("  请选择操作:")
+            print("  1️⃣  📤 导出所有图书到CSV")
+            print("  2️⃣  📥 从CSV文件导入图书")
+            print("  3️⃣  🔍 预览CSV文件内容")
+            print("  4️⃣  🔙 返回主菜单")
+
+            choice = input("\n  👉 请选择 (1-4): ").strip()
+
+            if choice == "1":
+                self._export_to_csv()
+                input("\n  按回车键继续...")
+            elif choice == "2":
+                self._import_from_csv()
+                input("\n  按回车键继续...")
+            elif choice == "3":
+                self._preview_csv_file()
+                input("\n  按回车键继续...")
+            elif choice == "4":
+                break
+            else:
+                self._print_error("无效选项，请输入 1-4 之间的数字")
+                input("\n  按回车键继续...")
+
+    def _export_to_csv(self) -> None:
+        """
+        导出所有图书到CSV文件
+        """
+        book_count = self.service.get_book_count()
+        if book_count == 0:
+            self._print_warning("当前书库为空，没有可导出的图书")
+            return
+
+        print()
+        self._print_info("💡 提示:")
+        self._print_info("   - 导出的CSV文件可以用Excel或其他表格软件打开")
+        self._print_info("   - UTF-8编码，支持中文")
+        self._print_info("   - 默认文件名: books_export.csv")
+        print()
+
+        file_path = input("  📁 请输入导出文件路径 (回车使用默认): ").strip()
+        if not file_path:
+            file_path = "books_export.csv"
+
+        try:
+            self._print_info(f"正在导出到: {file_path} ...")
+            exported_count = self.service.export_to_csv(file_path)
+            self._print_success(f"✅ 导出成功！共导出 {exported_count} 本图书")
+            self._print_info(f"📁 文件路径: {file_path}")
+        except CsvStorageError as error:
+            self._print_error(f"导出失败: {error}")
+        except Exception as error:
+            self._print_error(f"导出时发生未知错误: {error}")
+
+    def _import_from_csv(self) -> None:
+        """
+        从CSV文件导入图书
+        """
+        print()
+        self._print_info("💡 CSV格式要求:")
+        self._print_info("   - 必需列: title, author, year")
+        self._print_info("   - 可选列: isbn, publisher, book_id")
+        self._print_info("   - 如果没有book_id列，会自动生成")
+        self._print_info("   - 第一行必须是表头")
+        print()
+
+        file_path = input("  📁 请输入CSV文件路径: ").strip()
+        if not file_path:
+            self._print_warning("未输入文件路径")
+            return
+
+        preview = self.service.preview_csv_import(file_path)
+
+        if not preview.get("exists", False):
+            self._print_error(f"文件不存在: {file_path}")
+            return
+
+        if "error" in preview:
+            self._print_error(f"无法读取文件: {preview['error']}")
+            return
+
+        if not preview.get("required_fields_present", False):
+            self._print_error("CSV格式错误：缺少必需的列")
+            self._print_info("必需列: title, author, year")
+            self._print_info(f"实际列: {', '.join(preview.get('headers', []))}")
+            return
+
+        print()
+        self._print_info(f"📋 预览信息:")
+        self._print_info(f"   - 文件路径: {preview['path']}")
+        self._print_info(f"   - 数据行数: {preview['total_rows']} 行")
+        self._print_info(f"   - 列名: {', '.join(preview['headers'])}")
+
+        if preview.get("preview_rows"):
+            print()
+            self._print_info("📖 前几行数据预览:")
+            for i, row in enumerate(preview["preview_rows"][:3], 1):
+                title = row.get("title", "")[:20]
+                author = row.get("author", "")[:15]
+                year = row.get("year", "")
+                print(f"   {i}. 《{title}》- {author} ({year})")
+
+        print()
+        self._print_info("⚠️  导入选项:")
+        self._print_info("   - 1 = 跳过书库中已存在的ISBN（推荐）")
+        self._print_info("   - 2 = 允许导入重复ISBN（可能失败）")
+        print()
+
+        mode = input("  👉 请选择导入模式 (1/2，默认1): ").strip() or "1"
+
+        if mode == "1":
+            skip_existing = True
+        elif mode == "2":
+            skip_existing = False
+        else:
+            self._print_error("无效选项")
+            return
+
+        confirm = input("\n  ⚠️  确定要开始导入吗? (y/n): ").strip().lower()
+
+        if confirm != "y":
+            self._print_info("已取消导入")
+            return
+
+        try:
+            self._print_info("正在导入...")
+            success_count, failed_count, warnings = self.service.import_from_csv(
+                file_path,
+                skip_existing_isbn=skip_existing,
+                skip_duplicates_in_file=True,
+            )
+
+            print()
+            self._print_success(f"✅ 导入完成！")
+            self._print_info(f"   - 成功导入: {success_count} 本")
+            self._print_info(f"   - 跳过/失败: {failed_count} 本")
+
+            if warnings:
+                print()
+                self._print_warning("⚠️  警告信息:")
+                for warning in warnings[:10]:
+                    print(f"   - {warning}")
+                if len(warnings) > 10:
+                    print(f"   ... 还有 {len(warnings) - 10} 条警告")
+
+        except CsvInvalidFormatError as error:
+            self._print_error(f"CSV格式错误: {error}")
+        except CsvStorageError as error:
+            self._print_error(f"导入失败: {error}")
+        except Exception as error:
+            self._print_error(f"导入时发生未知错误: {error}")
+
+    def _preview_csv_file(self) -> None:
+        """
+        预览CSV文件内容
+        """
+        file_path = input("  📁 请输入CSV文件路径: ").strip()
+        if not file_path:
+            self._print_warning("未输入文件路径")
+            return
+
+        preview = self.service.preview_csv_import(file_path, max_rows=10)
+
+        if not preview.get("exists", False):
+            self._print_error(f"文件不存在: {file_path}")
+            return
+
+        if "error" in preview:
+            self._print_error(f"无法读取文件: {preview['error']}")
+            return
+
+        print()
+        self._print_info(f"📋 文件信息:")
+        self._print_info(f"   - 路径: {preview['path']}")
+        self._print_info(f"   - 数据行数: {preview['total_rows']} 行")
+        self._print_info(f"   - 列名: {', '.join(preview['headers'])}")
+        self._print_info(
+            f"   - 必需列检查: {'✅ 通过' if preview.get('required_fields_present') else '❌ 缺少必需列'}"
+        )
+
+        if preview.get("preview_rows"):
+            print()
+            self._print_info("📖 数据预览:")
+            print("  " + "-" * 70)
+            for i, row in enumerate(preview["preview_rows"], 1):
+                title = (row.get("title") or "")[:25]
+                author = (row.get("author") or "")[:15]
+                year = row.get("year") or "-"
+                isbn = (row.get("isbn") or "-")[:13]
+                print(f"  {i:<3} {title:<27} {author:<17} {year:<6} {isbn:<13}")
+            print("  " + "-" * 70)
+
+        if preview.get("required_fields_present"):
+            self._print_success("✅ 该CSV文件格式正确，可以导入")
+        else:
+            self._print_warning("⚠️  该CSV文件缺少必需的列，无法导入")
+            self._print_info("必需列: title, author, year")
 
     def _print_book_list(self, books: list[Book]) -> None:
         """

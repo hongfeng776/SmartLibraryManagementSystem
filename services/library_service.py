@@ -9,10 +9,15 @@
 """
 
 import uuid
-from typing import List, Optional, Dict
+from typing import List, Optional, Dict, Any, Tuple
 
 from models.book import Book
 from storage.json_storage import JsonStorage
+from storage.csv_storage import (
+    CsvStorage,
+    CsvStorageError,
+    CsvInvalidFormatError,
+)
 
 
 class LibraryServiceError(Exception):
@@ -418,3 +423,104 @@ class LibraryService:
             最新备份文件路径，无备份返回 None
         """
         return self.storage.get_latest_backup()
+
+    def export_to_csv(self, file_path: str) -> int:
+        """
+        将所有图书导出到CSV文件
+
+        与JSON存储完全独立，使用单独的CSV存储模块。
+
+        Args:
+            file_path: 导出的CSV文件路径
+
+        Returns:
+            导出的图书数量
+
+        Raises:
+            CsvStorageError: 导出失败时抛出
+        """
+        csv_storage = CsvStorage(file_path)
+        count = csv_storage.export_books(self.books)
+        return count
+
+    def preview_csv_import(self, file_path: str, max_rows: int = 5) -> Dict[str, Any]:
+        """
+        预览CSV文件内容，用于导入前检查
+
+        Args:
+            file_path: CSV文件路径
+            max_rows: 最多预览的行数
+
+        Returns:
+            包含预览信息的字典
+        """
+        csv_storage = CsvStorage(file_path)
+        return csv_storage.preview_csv(max_rows)
+
+    def import_from_csv(
+        self,
+        file_path: str,
+        skip_existing_isbn: bool = True,
+        skip_duplicates_in_file: bool = True,
+    ) -> Tuple[int, int, List[str]]:
+        """
+        从CSV文件导入图书
+
+        与JSON存储配合使用：导入的图书会添加到现有库中，
+        并通过JSON存储持久化。
+
+        Args:
+            file_path: CSV文件路径
+            skip_existing_isbn: 是否跳过书库中已存在的ISBN
+            skip_duplicates_in_file: 是否跳过CSV文件内部重复的ISBN
+
+        Returns:
+            元组: (成功导入数量, 跳过/失败数量, 警告信息列表)
+
+        Raises:
+            CsvStorageError: 导入失败时抛出
+            CsvInvalidFormatError: CSV格式错误时抛出
+        """
+        csv_storage = CsvStorage(file_path)
+        imported_books, failed_rows, warnings = csv_storage.import_books(
+            skip_duplicates=skip_duplicates_in_file
+        )
+
+        success_count = 0
+        skipped_count = 0
+        final_warnings = list(warnings)
+
+        for book in imported_books:
+            try:
+                if book.isbn and skip_existing_isbn:
+                    if self._is_isbn_taken(book.isbn):
+                        skipped_count += 1
+                        final_warnings.append(
+                            f"ISBN '{book.isbn}' 在书库中已存在，已跳过: 《{book.title}》"
+                        )
+                        continue
+
+                if book.book_id:
+                    if self.find_book_by_id(book.book_id):
+                        new_id = str(uuid.uuid4())[:8]
+                        final_warnings.append(
+                            f"图书ID '{book.book_id}' 已存在，已自动生成新ID: {new_id}"
+                        )
+                        book.book_id = new_id
+                else:
+                    book.book_id = str(uuid.uuid4())[:8]
+
+                self.books.append(book)
+                success_count += 1
+
+            except Exception as error:
+                skipped_count += 1
+                final_warnings.append(
+                    f"导入失败: 《{book.title}》- {error}"
+                )
+
+        if success_count > 0:
+            self.storage.save(self.books)
+
+        total_failed = skipped_count + len(failed_rows)
+        return success_count, total_failed, final_warnings
