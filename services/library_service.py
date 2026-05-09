@@ -25,6 +25,12 @@ class LibraryService:
         self.storage = storage
         self.books: List[Book] = self.storage.load()
 
+    def flush(self) -> None:
+        self.storage.save(self.books)
+
+    def get_book_count(self) -> int:
+        return len(self.books)
+
     def _is_isbn_taken(self, isbn: str, exclude_book_id: Optional[str] = None) -> bool:
         isbn_stripped = isbn.strip()
         if not isbn_stripped:

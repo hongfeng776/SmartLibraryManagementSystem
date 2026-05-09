@@ -13,9 +13,11 @@ class ConsoleUI:
         self.service = service
 
     def run(self) -> None:
+        count = self.service.get_book_count()
         print("欢迎使用图书管理系统！")
-        while True:
-            try:
+        print(f"已加载 {count} 条图书记录。")
+        try:
+            while True:
                 self._print_menu()
                 choice = input("请选择操作 (1-6): ").strip()
                 if choice == "1":
@@ -29,21 +31,24 @@ class ConsoleUI:
                 elif choice == "5":
                     self._list_all_books()
                 elif choice == "6":
-                    print("再见！")
+                    self._shutdown()
                     break
                 else:
                     print("无效选项，请输入 1-6 之间的数字。")
-            except KeyboardInterrupt:
-                print("\n\n检测到中断，正在退出...")
-                break
-            except EOFError:
-                print("\n\n输入流已结束，正在退出...")
-                break
-            except LibraryServiceError as e:
-                print(f"操作失败: {e}")
-            except Exception as e:
-                print(f"发生未知错误: {e}")
-            print()
+                print()
+        except KeyboardInterrupt:
+            print("\n\n检测到中断，正在保存数据并退出...")
+            self._shutdown()
+        except EOFError:
+            print("\n\n输入流已结束，正在保存数据并退出...")
+            self._shutdown()
+
+    def _shutdown(self) -> None:
+        try:
+            self.service.flush()
+            print("数据已保存。再见！")
+        except Exception as e:
+            print(f"保存数据时出错: {e}")
 
     def _print_menu(self) -> None:
         print("=" * 32)
